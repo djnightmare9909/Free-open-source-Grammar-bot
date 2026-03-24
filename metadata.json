@@ -1,0 +1,5 @@
+{
+  "name": "Grammar AI",
+  "description": "A professional grammar and style checker powered by Gemini. Supports PDF, DOCX, and TXT files with local history.",
+  "requestFramePermissions": []
+}
