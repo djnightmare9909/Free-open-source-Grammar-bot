@@ -471,7 +471,7 @@ export default function App() {
 
         {/* Footer */}
         <footer className="h-12 border-t border-border flex items-center justify-center px-8 text-[10px] text-muted-foreground tracking-widest uppercase">
-          Powered by Gemini 3 Flash • Private Local History
+          Powered by Gemini 3.1 Flash Lite • Private Local History
         </footer>
       </main>
     </div>
