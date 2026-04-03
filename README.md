@@ -16,12 +16,12 @@ Follow these steps to get Grammar AI running on your local machine:
 
 1. **Clone the Repository**
    ```bash
-   git clone https://github.com/your-username/grammar-ai.git
+   git clone https://github.com/djnightmare9909/Free-open-source-Grammar-bot.git
    ```
 
 2. **Navigate to the Directory**
    ```bash
-   cd grammar-ai
+   cd Free-open-source-Grammar-bot
    ```
 
 3. **Install Dependencies**
