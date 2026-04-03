@@ -86,6 +86,12 @@ export default function App() {
     }
   };
 
+  const handleClearWorkspace = () => {
+    setInputText('');
+    setResult(null);
+    setError(null);
+  };
+
   const handleCheck = async () => {
     if (!inputText.trim()) return;
     
@@ -353,9 +359,20 @@ export default function App() {
             {/* Input Section */}
             <div className="flex flex-col space-y-4">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                  Original Text
-                </label>
+                <div className="flex items-center gap-4">
+                  <label className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                    Original Text
+                  </label>
+                  {(inputText || result || error) && (
+                    <button
+                      onClick={handleClearWorkspace}
+                      className="text-[10px] font-medium text-muted-foreground hover:text-destructive transition-colors flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Clear
+                    </button>
+                  )}
+                </div>
                 <span className="text-[10px] text-muted-foreground">
                   {inputText.length} characters
                 </span>
