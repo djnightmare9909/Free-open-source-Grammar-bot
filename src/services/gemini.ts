@@ -1,16 +1,40 @@
-import { GoogleGenAI, Type, type GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, Type, ThinkingLevel, type GenerateContentResponse } from "@google/genai";
 import { getSetting } from "../lib/db";
 
 let aiInstance: GoogleGenAI | null = null;
 let currentApiKey: string | null = null;
 
-async function getApiKey(): Promise<string | undefined> {
-  const userApiKey = await getSetting<string>('gemini-api-key');
-  return userApiKey || process.env.GEMINI_API_KEY;
+// Cache settings in memory to avoid repeated IndexedDB lookups
+let cachedSettings: {
+  apiKey?: string;
+  localUrl?: string;
+  localModel?: string;
+  lastUpdate: number;
+} = { lastUpdate: 0 };
+
+const CACHE_TTL = 5000; // 5 seconds
+
+async function getCachedSettings() {
+  const now = Date.now();
+  if (now - cachedSettings.lastUpdate > CACHE_TTL) {
+    const [apiKey, localUrl, localModel] = await Promise.all([
+      getSetting<string>('gemini-api-key'),
+      getSetting<string>('local-ai-url'),
+      getSetting<string>('local-ai-model')
+    ]);
+    cachedSettings = {
+      apiKey: apiKey || process.env.GEMINI_API_KEY,
+      localUrl,
+      localModel,
+      lastUpdate: now
+    };
+  }
+  return cachedSettings;
 }
 
 export async function getAI() {
-  const apiKey = await getApiKey();
+  const settings = await getCachedSettings();
+  const apiKey = settings.apiKey;
 
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY is not configured. Please add it to your environment variables or settings.");
@@ -27,18 +51,19 @@ export async function getAI() {
 export function resetAI() {
   aiInstance = null;
   currentApiKey = null;
+  cachedSettings.lastUpdate = 0; // Invalidate cache
 }
 
 async function generateContentLocal(params: any): Promise<GenerateContentResponse> {
-  const localUrl = await getSetting<string>('local-ai-url');
-  const localModel = await getSetting<string>('local-ai-model') || 'local-model';
+  const settings = await getCachedSettings();
+  const localUrl = settings.localUrl;
+  const localModel = settings.localModel || 'local-model';
 
   if (!localUrl) throw new Error("Local AI URL is not configured.");
 
   const baseUrl = localUrl.replace(/\/+$/, '');
   const url = `${baseUrl}/chat/completions`;
 
-  // Convert Gemini prompt to OpenAI format
   const prompt = typeof params.contents === 'string' 
     ? params.contents 
     : params.contents.parts?.[0]?.text || JSON.stringify(params.contents);
@@ -65,7 +90,6 @@ async function generateContentLocal(params: any): Promise<GenerateContentRespons
   const data = await response.json();
   const text = data.choices[0].message.content;
 
-  // Mock Gemini response structure
   return {
     text: text,
     candidates: [{ content: { parts: [{ text }], role: 'model' } }],
@@ -78,8 +102,8 @@ export interface GrammarResult {
 }
 
 export async function checkGrammar(text: string): Promise<GrammarResult> {
-  const localUrl = await getSetting<string>('local-ai-url');
-  const isLocal = localUrl && localUrl.trim().length > 0;
+  const settings = await getCachedSettings();
+  const isLocal = settings.localUrl && settings.localUrl.trim().length > 0;
 
   const prompt = `Correct the grammar, spelling, punctuation, and style of the following text. 
     Focus strictly on grammar and clarity. 
@@ -87,43 +111,64 @@ export async function checkGrammar(text: string): Promise<GrammarResult> {
 
   let response: GenerateContentResponse;
 
-  if (isLocal) {
-    response = await generateContentLocal({ contents: prompt });
-  } else {
-    const ai = await getAI();
-    const model = "gemini-3-flash-preview";
-    
-    response = await ai.models.generateContent({
-      model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            correctedText: {
-              type: Type.STRING,
-              description: "The fully corrected version of the input text.",
-            },
-            changes: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "A list of specific changes made to the text.",
+  try {
+    if (isLocal) {
+      response = await generateContentLocal({ contents: prompt });
+    } else {
+      const ai = await getAI();
+      const model = "gemini-3.1-flash-lite-preview";
+      
+      // Add a timeout to prevent hanging indefinitely
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+      try {
+        response = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            // Use MINIMAL for Flash Lite to ensure fastest response
+            thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                correctedText: {
+                  type: Type.STRING,
+                  description: "The fully corrected version of the input text.",
+                },
+                changes: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                  description: "A list of specific changes made to the text.",
+                },
+              },
+              required: ["correctedText", "changes"],
             },
           },
-          required: ["correctedText", "changes"],
-        },
-      },
-    });
-  }
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
 
-  // Extract JSON from response (handles potential markdown or extra text from local models)
-  const rawText = response.text || '';
-  const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error('No JSON found in response');
-  }
+    const rawText = response.text || '';
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('The AI returned an invalid response format. Please try again.');
+    }
 
-  const result = JSON.parse(jsonMatch[0]);
-  return result as GrammarResult;
+    const result = JSON.parse(jsonMatch[0]);
+    if (!result.correctedText) {
+      throw new Error('The AI failed to generate a correction. Please try again.');
+    }
+    
+    return result as GrammarResult;
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new Error('The request timed out. Please check your connection or try a shorter text.');
+    }
+    console.error('Grammar check error:', err);
+    throw err;
+  }
 }
